@@ -112,6 +112,7 @@ const
   DEF_QUEUE_POP_TIMEOUT = 200;
   DEF_WAIT_FLUSH_LOG = 30;
   DEF_USER_AGENT = 'Quick.Logger Agent';
+  MAX_EVENT_LEVEL = 50;
 
 type
 
@@ -129,6 +130,8 @@ type
 
   TProviderErrorEvent = procedure(const aProviderName, aError : string) of object;
 
+  TEventDateArray = array [0..MAX_EVENT_LEVEL] of TDateTime;
+
   {$IFNDEF DELPHIRX10_UP}
   TThreadID = DWORD;
   {$ENDIF}
@@ -138,12 +141,17 @@ type
     fEventType : TEventType;
     fMsg : string;
     fEventDate : TDateTime;
+    FLevel: Integer;
+    FPreviousEventDate: TDateTime;
     fThreadId : TThreadID;
   public
     constructor Create;
     property EventType : TEventType read fEventType write fEventType;
     property Msg : string read fMsg write fMsg;
     property EventDate : TDateTime read fEventDate write fEventDate;
+    property Level: Integer read FLevel write FLevel;
+    property PreviousEventDate: TDateTime read FPreviousEventDate write
+        FPreviousEventDate;
     property ThreadId : TThreadID read fThreadId write fThreadId;
     function EventTypeName : string;
     function Clone : TLogItem; virtual;
@@ -185,7 +193,7 @@ type
     function Status : TLogProviderStatus;
     procedure SetStatus(cStatus : TLogProviderStatus);
     procedure SetLogTags(cLogTags : ILogTags);
-    function IsSendLimitReached(cEventType : TEventType): Boolean;
+    function IsSendLimitReached(cLogItem: TLogItem): Boolean;
     function GetLogLevel : TLogLevel;
     function IsEnabled : Boolean;
     function GetVersion : string;
@@ -225,14 +233,16 @@ type
     fLastSent : TDateTime;
     fTimeRange : TSendLimitTimeRange;
     fLimitEventTypes : TLogLevel;
+    FMaxEventLevel: Integer;
     fNumBlocked : Int64;
     fMaxSent: Integer;
   public
     constructor Create;
     property TimeRange : TSendLimitTimeRange read fTimeRange write fTimeRange;
     property LimitEventTypes : TLogLevel read fLimitEventTypes write fLimitEventTypes;
+    property MaxEventLevel: Integer read FMaxEventLevel write FMaxEventLevel;
     property MaxSent : Integer read fMaxSent write fMaxSent;
-    function IsLimitReached(cEventType : TEventType): Boolean;
+    function IsLimitReached(cLogItem: TLogItem): Boolean;
   end;
 
   {$IFDEF FPC}
@@ -315,9 +325,10 @@ type
     procedure SetEnabled(aValue : Boolean);
     function GetQueuedLogItems : Integer;
     procedure EnQueueItem(cLogItem : TLogItem);
+    function LogItemEventDurationStr(cLogItem: TLogItem): string;
     function GetEventTypeName(cEventType : TEventType) : string;
     procedure SetEventTypeName(cEventType: TEventType; const cValue : string);
-    function IsSendLimitReached(cEventType : TEventType): Boolean;
+    function IsSendLimitReached(cLogItem: TLogItem): Boolean;
     procedure SetMaxFailsToRestart(const Value: Integer);
   protected
     fJsonOutputOptions : TJsonOutputOptions;
@@ -338,6 +349,7 @@ type
     procedure SetLogTags(cLogTags : ILogTags);
     function GetLogLevel : TLogLevel;
     property SystemInfo : TSystemInfo read fSystemInfo;
+    function FormatTime(cDateTime: tDateTime): string;
     procedure NotifyError(const aError : string);
   public
     constructor Create; virtual;
@@ -418,6 +430,7 @@ type
 
   TLogger = class(TInterfacedObject,ILogger)
   private
+    FCurrentEventLevel: Integer;
     fThreadProviderLog : TThreadProviderLog;
     fLogQueue : TLogQueue;
     fProviders : TLogProviderList;
@@ -426,8 +439,10 @@ type
     fOnQueueError: TQueueErrorEvent;
     fOwnErrorsProvider : TLogProviderBase;
     fOnProviderError : TProviderErrorEvent;
+    fEventLevelDates: TEventDateArray;
     function GetQueuedLogItems : Integer;
-    procedure EnQueueItem(cEventDate : TSystemTime; const cMsg : string; cEventType : TEventType); overload;
+    procedure EnQueueItem(cEventDate: TSystemTime; const cMsg: string; cEventType:
+        TEventType); overload;
     procedure EnQueueItem(cEventDate : TSystemTime; const cMsg : string; const cException, cStackTrace : string; cEventType : TEventType); overload;
     procedure EnQueueItem(cLogItem : TLogItem); overload;
     procedure OnGetHandledException(E : Exception);
@@ -440,6 +455,7 @@ type
     {$ELSE}
     procedure OnProviderListNotify(ASender: TObject; constref AItem: ILogProvider; AAction: TCollectionNotification);
     {$ENDIF}
+    procedure SetCurrentEventLevel(cEventLevel: Integer);
   public
     constructor Create;
     destructor Destroy; override;
@@ -477,6 +493,13 @@ type
     procedure &Except(const cMsg : string; cValues : array of const); overload;
     procedure &Except(const cMsg, cException, cStackTrace : string); overload;
     procedure &Except(const cMsg : string; cValues: array of const; const cException, cStackTrace: string); overload;
+    procedure DecCurrentEventLevel;
+    procedure IncCurrentEventLevel;
+    property CurrentEventLevel: Integer read FCurrentEventLevel;
+    procedure StartProcedure(const cMsg : string; cEventType : TEventType); overload;
+    procedure StartProcedure(const cMsg : string; cValues : array of const; cEventType : TEventType); overload;
+    procedure StopProcedure(const cMsg : string; cEventType : TEventType); overload;
+    procedure StopProcedure(const cMsg : string; cValues : array of const; cEventType : TEventType); overload;
   end;
 
   procedure Log(const cMsg : string; cEventType : TEventType); overload;
@@ -673,9 +696,9 @@ begin
   Result := (fUsesQueue) and (Assigned(fThreadLog));
 end;
 
-function TLogProviderBase.IsSendLimitReached(cEventType : TEventType): Boolean;
+function TLogProviderBase.IsSendLimitReached(cLogItem: TLogItem): Boolean;
 begin
-  Result := fSendLimits.IsLimitReached(cEventType);
+  Result := fSendLimits.IsLimitReached(cLogItem);
   if Result and Assigned(fOnSendLimits) then fOnSendLimits(fName);
 end;
 
@@ -757,8 +780,8 @@ begin
     //try process token as variable
     if cToken = 'DATETIME' then Result := DateTimeToStr(cLogItem.EventDate,FormatSettings)
     else if cToken = 'DATE' then Result := DateToStr(cLogItem.EventDate)
-    else if cToken = 'TIME' then Result := TimeToStr(cLogItem.EventDate)
-    else if cToken = 'LEVEL' then Result := cLogItem.EventTypeName
+    else if cToken = 'TIME' then Result := FormatTime(cLogItem.EventDate)
+    else if cToken = 'LEVEL' then Result := EventTypeName[cLogItem.EventType]
     else if cToken = 'LEVELINT' then Result := Integer(cLogItem.EventType).ToString
     else if cToken = 'MESSAGE' then Result := cLogItem.Msg
     else if cToken = 'ENVIRONMENT' then Result := Self.Environment
@@ -772,6 +795,9 @@ begin
     else if cToken = 'CPUCORES' then Result := Self.SystemInfo.CPUCores.ToString
     else if cToken = 'THREADID' then Result := cLogItem.ThreadId.ToString
     else if cToken = 'PROCESSID' then Result := SystemInfo.ProcessId.ToString
+    else if cToken = 'EVENTLEVEL' then Result := cLogItem.Level.ToString
+    else if cToken = 'EVENTLEVELBLANKS' then Result := ''.PadLeft(cLogItem.Level*2)
+    else if cToken = 'DURATION' then Result := LogItemEventDurationStr(cLogItem)
     else Result := '%error%';
   end;
 end;
@@ -1001,6 +1027,34 @@ begin
   {$ENDIF}
 end;
 
+function TLogProviderBase.FormatTime(cDateTime: tDateTime): string;
+var p : Integer;
+begin
+  Result:= TimeToStr(cDateTime, FormatSettings);
+  p := Pos (' ',Result);
+  if p > 0 then
+    Result := Copy(Result, p+1, Length(Result)-p);
+end;
+
+function TLogProviderBase.LogItemEventDurationStr(cLogItem: TLogItem): string;
+var Duration : TDateTime;
+    Days : Integer;
+begin
+  if (cLogItem.PreviousEventDate <= 0) or (cLogItem.PreviousEventDate > cLogItem.EventDate) then
+  begin
+    Result := '';
+    exit;
+  end;
+  Duration:= cLogItem.EventDate - cLogItem.PreviousEventDate;
+  if Duration > 1 then
+  begin
+    Days := Trunc(Duration);
+    Duration := Duration - Days;
+    Result := Format ('%d ', [Days]);
+  end;
+  Result := Format('%s%s', [Result, FormatTime(Duration)]);
+end;
+
 function TLogProviderBase.GetEventTypeName(cEventType: TEventType): string;
 begin
   Result := fEventTypeNames[Integer(cEventType)];
@@ -1128,7 +1182,7 @@ begin
             if fProvider.Status = psRunning then
             begin
               //Writelog if not Send limitable or not limit reached
-              if not fProvider.IsSendLimitReached(logitem.EventType) then fProvider.WriteLog(logitem);
+              if not fProvider.IsSendLimitReached(logitem) then fProvider.WriteLog(logitem);
             end;
           except
             on E : Exception do
@@ -1272,6 +1326,8 @@ begin
   Result := TLogItem.Create;
   Result.EventType := Self.EventType;
   Result.EventDate := Self.EventDate;
+  Result.Level := Self.Level;
+  Result.PreviousEventDate := Self.PreviousEventDate;
   Result.ThreadId := Self.ThreadId;
   Result.Msg := Self.Msg;
 end;
@@ -1292,6 +1348,8 @@ end;
 { TLogger }
 
 constructor TLogger.Create;
+var
+  i: Integer;
 begin
   inherited;
   GlobalLoggerHandledException := OnGetHandledException;
@@ -1306,6 +1364,8 @@ begin
   fThreadProviderLog.LogQueue := fLogQueue;
   fThreadProviderLog.Providers := fProviders;
   fThreadProviderLog.Start;
+  for i := 0 to MAX_EVENT_LEVEL do
+    fEventLevelDates[i] := 0;
 end;
 
 destructor TLogger.Destroy;
@@ -1392,7 +1452,8 @@ begin
   Self.EnQueueItem(SystemTime,Format(cMsg,cValues),cEventType);
 end;
 
-procedure TLogger.EnQueueItem(cEventDate : TSystemTime; const cMsg : string; cEventType : TEventType);
+procedure TLogger.EnQueueItem(cEventDate: TSystemTime; const cMsg: string;
+    cEventType: TEventType);
 var
   logitem : TLogItem;
 begin
@@ -1426,6 +1487,9 @@ end;
 
 procedure TLogger.EnQueueItem(cLogItem : TLogItem);
 begin
+  cLogitem.Level := CurrentEventLevel;
+  cLogItem.PreviousEventDate := fEventLevelDates[CurrentEventLevel];
+  fEventLevelDates[CurrentEventLevel] := cLogItem.EventDate;
   {$IFDEF MSWINDOWS}
   cLogItem.ThreadId := GetCurrentThreadId;
   {$ELSE}
@@ -1546,6 +1610,18 @@ begin
   Self.Add(Format(cMsg,cValues),cException,cStackTrace,TEventType.etException);
 end;
 
+procedure TLogger.DecCurrentEventLevel;
+begin
+  SetCurrentEventLevel(CurrentEventLevel-1);
+  if CurrentEventLevel > 0 then
+    fEventLevelDates[CurrentEventLevel+1] := 0;
+end;
+
+procedure TLogger.IncCurrentEventLevel;
+begin
+  SetCurrentEventLevel(CurrentEventLevel+1);
+end;
+
 procedure TLogger.OnGetHandledException(E : Exception);
 var
   SystemTime : TSystemTime;
@@ -1628,6 +1704,16 @@ begin
   if Assigned(fOnProviderError) then fOnProviderError(aProviderName,aError);
 end;
 
+procedure TLogger.SetCurrentEventLevel(cEventLevel: Integer);
+begin
+  if cEventLevel < 0 then
+    FCurrentEventLevel := 0
+  else if cEventLevel > MAX_EVENT_LEVEL then
+    FCurrentEventLevel := MAX_EVENT_LEVEL
+  else
+    FCurrentEventLevel := cEventLevel;
+end;
+
 procedure TLogger.SetOwnErrorsProvider(const Value: TLogProviderBase);
 var
   provider : ILogProvider;
@@ -1638,6 +1724,30 @@ begin
     //redirect provider errors to logger
     TLogProviderBase(provider).fOnNotifyError := NotifyProviderError;
   end;
+end;
+
+procedure TLogger.StartProcedure(const cMsg : string; cEventType : TEventType);
+begin
+  Add(cMsg, cEventType);
+  IncCurrentEventLevel;
+end;
+
+procedure TLogger.StartProcedure(const cMsg : string; cValues : array of const; cEventType : TEventType);
+begin
+  Add(cMsg, cValues, cEventType);
+  IncCurrentEventLevel;
+end;
+
+procedure TLogger.StopProcedure(const cMsg : string; cEventType : TEventType);
+begin
+  DecCurrentEventLevel;
+  Add(cMsg, cEventType);
+end;
+
+procedure TLogger.StopProcedure(const cMsg : string; cValues : array of const; cEventType : TEventType);
+begin
+  DecCurrentEventLevel;
+  Add(cMsg, cValues, cEventType);
 end;
 
 { TLogSendLimit }
@@ -1651,14 +1761,22 @@ begin
   fFirstSent := 0;
   fLastSent := 0;
   fCurrentNumSent := 0;
+  FMaxEventLevel := MaxInt;
 end;
 
-function TLogSendLimit.IsLimitReached(cEventType : TEventType): Boolean;
+function TLogSendLimit.IsLimitReached(cLogItem: TLogItem): Boolean;
 var
   reset : Boolean;
 begin
+  //check the max log level
+  if clogItem.Level > MaxEventLevel then
+  begin
+    Result := true;
+    exit;
+  end;
+
   //check sent number in range
-  if (fTimeRange = slNoLimit) or (not (cEventType in fLimitEventTypes)) then
+  if (fTimeRange = slNoLimit) or (not (cLogItem.EventType in fLimitEventTypes)) then
   begin
     fLastSent := Now();
     Result := False;
