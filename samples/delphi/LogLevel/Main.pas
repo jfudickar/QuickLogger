@@ -101,7 +101,7 @@ procedure TForm1.FormShow (Sender: TObject);
 begin
   InitLogProvider;
   ClearLogs;
-  AddRecursivelLog(5);
+  AddRecursivelLog(3);
 end;
 
 procedure TForm1.InitLogProvider;
@@ -114,7 +114,7 @@ begin
   GlobalLogStringListProvider.IncludedInfo := [iiAppName, iiHost, iiUserName, iiEnvironment, iiPlatform, iiOSVersion,
     iiExceptionInfo, iiExceptionStackTrace, iiThreadId];
   GlobalLogStringListProvider.LogLevel := LOG_ALL;
-  GlobalLogStringListProvider.SendLimits.MaxEventLevel := 3;
+  GlobalLogStringListProvider.SendLimits.MaxEventLevel := 8;
   SetLogProviderEventTypeNames(GlobalLogStringListProvider);
   Logger.Providers.Add (GlobalLogStringListProvider);
 
@@ -130,15 +130,15 @@ procedure TForm1.AddSimpleLog;
 begin
   Logger.StartProcedure('TForm1.AddSimpleLog', etInfo);
   Logger.Info ('Hello world!');
-  sleep(10);
-  Logger.Error ('An error msg!');
-  sleep(10);
-  Logger.Warn ('A warning msg!');
-  sleep(10);
-  Logger.Critical ('A critical error!');
-  sleep(10);
+  sleep(random(50));
+//  Logger.Error ('An error msg!');
+//  sleep(random(50));
+//  Logger.Warn ('A warning msg!');
+//  sleep(random(50));
+//  Logger.Critical ('A critical error!');
+//  sleep(random(50));
   Logger.Succ ('Successfully process');
-  sleep(10);
+  sleep(random(50));
   Logger.StopProcedure('TForm1.AddSimpleLog', etInfo);
 end;
 

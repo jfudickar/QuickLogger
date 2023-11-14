@@ -452,6 +452,8 @@ Properties:
 - **AppName:** Uses default filename without extension, but can be customized.
 - **IncludedInfo:** Define which fields do you want to include as part of your log info (iiAppName, iiHost, iiUserName, iiEnvironment, iiPlatform, iiOSVersion, iiExceptionInfo, iiExceptionStackTrace, iiThreadId, iiProcessId)
 - **IncludedTags:** Define wich tags do you want to include as part of your log info (tags are global and need to added to logger).
+- **EventLevel:** Level of message based on IncCurrentEventLevel/DecCurrentEventLevel
+- **Duration:** Distance to the last send log message on the same event level
 	
 ```delphi
 GlobalLogConsoleProvider.IncludedInfo := [iiAppName,iiHost,iiEnvironment,iiPlatform];
@@ -504,6 +506,12 @@ QuickLogger has a lot of predefined variables, but you can define your own tags 
 **CPUCORES** : Number of CPU cores
 
 **THREAID** : Thread Id log item set
+
+**EVENTLEVEL** : Level of the event (numeric)
+
+**EVENTLEVELBLANKS** : Blanks based on the event level of the message, this can be used in front of the **MESSAGE** text to show the message text hierarchical structured 
+
+**DURATION** : Distance between the event date of this message and the event date of the last msg with the same event level.
 
 ### Custom Tags:
 
@@ -596,5 +604,72 @@ QuickLogger can capture your application exceptions. There are 3 exception hooks
 - **Quick.Logger.RuntimeErrorHook:** Receive runtime errors.
 - **Quick.Logger.UnhandledExceptionHook:** Receive only unhandled exceptions (not in try..except block).
 
+
+## Procedure tracing:
+Using the functions **Logger.StartProcedure** and **Logger.StopProcedure** a call stack of the procedures could be protocolled (including the time how long a procedure was running). This functionality makes use of the event level attribute and the **Logger.IncCurrentEventLevel** and **Logger.IncCurrentEventLevel** functions.
+
+### Example
+
+_Logger Configuration_
+```delphi
+  GlobalLogStringListProvider.CustomMsgOutput := true;
+  GlobalLogStringListProvider.CustomFormatOutput := 
+      '%{DATETIME} - [%{LEVEL}] : %{EVENTLEVELBLANKS}%{MESSAGE} # %{EVENTLEVEL} - %{DURATION} ';
+  GlobalLogStringListProvider.TimePrecission := true;
+```
+
+_Sample Procedures_
+```delphi
+procedure TForm1.AddRecursivelLog(iLevel: Integer);
+begin
+  if iLevel <= 0 then
+    Exit;
+  Logger.StartProcedure('TForm1.AddRecursivelLog %d', [iLevel], etInfo);
+  Sleep (Random(100));
+  AddSimpleLog;
+  AddRecursivelLog(iLevel-1);
+  Logger.StopProcedure('TForm1.AddRecursivelLog %d', [iLevel], etInfo);
+end;
+
+procedure TForm1.AddSimpleLog;
+begin
+  Logger.StartProcedure('TForm1.AddSimpleLog', etInfo);
+  Logger.Info ('Hello world!');
+  sleep(random(50));
+  Logger.Succ ('Successfully process');
+  sleep(random(50));
+  Logger.StopProcedure('TForm1.AddSimpleLog', etInfo);
+end;
+```
+_Sample Call
+```delphi
+  AddRecursivelLog(3);
+```
+
+_Result Output_
+```log
+14-11-2023 22:43:07.379  - [INFO    ] : TForm1.AddRecursivelLog 3 # 0 - 00:00:00.000 
+14-11-2023 22:43:07.470  - [INFO    ] :   TForm1.AddSimpleLog # 1 - 00:00:00.091  
+14-11-2023 22:43:07.470  - [INFO    ] :     Hello world! # 2 - 00:00:00.000 
+14-11-2023 22:43:07.518  - [SUCCESS ] :     Successfully process # 2 - 00:00:00.048  
+14-11-2023 22:43:07.564  - [INFO    ] :   TForm1.AddSimpleLog # 1 - 00:00:00.094  
+14-11-2023 22:43:07.564  - [INFO    ] :   TForm1.AddRecursivelLog 2 # 1 - 00:00:00.000 
+14-11-2023 22:43:07.611  - [INFO    ] :     TForm1.AddSimpleLog # 2 - 00:00:00.047  
+14-11-2023 22:43:07.611  - [INFO    ] :       Hello world! # 3 - 00:00:00.000 
+14-11-2023 22:43:07.642  - [SUCCESS ] :       Successfully process # 3 - 00:00:00.031  
+14-11-2023 22:43:07.658  - [INFO    ] :     TForm1.AddSimpleLog # 2 - 00:00:00.047  
+14-11-2023 22:43:07.658  - [INFO    ] :     TForm1.AddRecursivelLog 1 # 2 - 00:00:00.000 
+14-11-2023 22:43:07.658  - [INFO    ] :       TForm1.AddSimpleLog # 3 - 00:00:00.000 
+14-11-2023 22:43:07.658  - [INFO    ] :         Hello world! # 4 - 00:00:00.000 
+14-11-2023 22:43:07.673  - [SUCCESS ] :         Successfully process # 4 - 00:00:00.015  
+14-11-2023 22:43:07.689  - [INFO    ] :       TForm1.AddSimpleLog # 3 - 00:00:00.031  
+14-11-2023 22:43:07.689  - [INFO    ] :     TForm1.AddRecursivelLog 1 # 2 - 00:00:00.031  
+14-11-2023 22:43:07.689  - [INFO    ] :   TForm1.AddRecursivelLog 2 # 1 - 00:00:00.125  
+14-11-2023 22:43:07.689  - [INFO    ] : TForm1.AddRecursivelLog 3 # 0 - 00:00:00.310 
+```
+
+As you can see in the result output it's easy to see in which procedure which log messages has been created and which procedure call taks how long.
+
+Further details you can find in the samples applications.
 
 >Do you want to learn delphi or improve your skills? [learndelphi.org](https://learndelphi.org)
