@@ -124,7 +124,7 @@ type
     {$ENDIF}
   {$ENDIF}
 
-  TLogInfoField = (iiAppName, iiHost, iiUserName, iiEnvironment, iiPlatform, iiOSVersion, iiExceptionInfo, iiExceptionStackTrace, iiThreadId, iiProcessId);
+  TLogInfoField = (iiAppName, iiHost, iiUserName, iiEnvironment, iiPlatform, iiOSVersion, iiExceptionInfo, iiExceptionStackTrace, iiThreadId, iiProcessId, iiEventLevel, iiDuration);
 
   TIncludedLogInfo = set of TLogInfoField;
 
@@ -719,6 +719,8 @@ begin
   if iiUserName in fIncludedInfo then Result.{$IFDEF FPC}Add{$ELSE}AddPair{$ENDIF}('user',SystemInfo.UserName);
   if iiThreadId in IncludedInfo then Result.{$IFDEF FPC}Add{$ELSE}AddPair{$ENDIF}('threadid',cLogItem.ThreadId.ToString);
   if iiProcessId in IncludedInfo then Result.{$IFDEF FPC}Add{$ELSE}AddPair{$ENDIF}('pid',SystemInfo.ProcessId.ToString);
+  if iiEventLevel in IncludedInfo then Result.{$IFDEF FPC}Add{$ELSE}AddPair{$ENDIF}('eventlevel',cLogItem.Level);
+  if (iiDuration in IncludedInfo) and (cLogItem.PreviousEventDate > 0) then Result.{$IFDEF FPC}Add{$ELSE}AddPair{$ENDIF}('duration',DateTimeToJsonDate(cLogItem.EventDate-cLogItem.PreviousEventDate));
 
   if cLogItem is TLogExceptionItem then
   begin
@@ -886,6 +888,8 @@ begin
     if iiPlatform in IncludedInfo then msg.Add(Format('<B>Platform:</B> %s%s',[PlatformInfo,HTMBR]));
     if iiThreadId in IncludedInfo then msg.Add(Format('<B>ThreadId:</B> %d',[cLogItem.ThreadId]));
     if iiProcessId in IncludedInfo then msg.Add(Format('<B>PID:</B> %d',[SystemInfo.ProcessId]));
+    if iiEventLevel in IncludedInfo then msg.Add(Format('<B>Eventlevel:</B> %d',[cLogItem.Level]));
+    if (iiDuration in IncludedInfo) and (cLogItem.PreviousEventDate > 0) then msg.Add(Format('<B>Duration:</B> %d',[FormatTime(cLogItem.EventDate-cLogItem.PreviousEventDate)]));
     for tagName in IncludedTags do
     begin
       if fCustomTags.TryGetValue(tagName,tagValue) then msg.Add(Format('<B>%s</B> %s',[tagName,tagValue]));
@@ -916,6 +920,8 @@ begin
     if iiPlatform in IncludedInfo then msg.Add(Format('Platform: %s',[PlatformInfo]));
     if iiThreadId in IncludedInfo then msg.Add(Format('ThreadId: %d',[cLogItem.ThreadId]));
     if iiProcessId in IncludedInfo then msg.Add(Format('PID: %d',[SystemInfo.ProcessId]));
+    if iiEventLevel in IncludedInfo then msg.Add(Format('Eventlevel: %d',[cLogItem.Level]));
+    if (iiDuration in IncludedInfo) and (cLogItem.PreviousEventDate > 0) then msg.Add(Format('Duration: %d',[FormatTime(cLogItem.EventDate-cLogItem.PreviousEventDate)]));
     for tagName in IncludedTags do
     begin
       if fCustomTags.TryGetValue(tagName,tagValue) then msg.Add(Format('%s: %s',[tagName,tagValue]));
@@ -1619,6 +1625,8 @@ end;
 
 procedure TLogger.IncCurrentEventLevel;
 begin
+  if CurrentEventLevel < MAX_EVENT_LEVEL then
+    fEventLevelDates[CurrentEventLevel+1] := fEventLevelDates[CurrentEventLevel];
   SetCurrentEventLevel(CurrentEventLevel+1);
 end;
 
